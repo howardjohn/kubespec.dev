@@ -12,31 +12,41 @@
 
 ## Generating API docs for Hugo (or any static site)
 
-The `render` script generates self-contained HTML widgets from any CRD YAML file. The output embeds all CSS inline (no external dependencies, no JavaScript, no iframe) so you can paste it directly into Hugo content, shortcodes, or templates.
+The `render` scripts generate self-contained HTML widgets from any CRD YAML file.
+The output embeds all CSS inline (no external dependencies, no JavaScript, no iframe)
+so you can paste it directly into Hugo content, shortcodes, or templates.
 
-**Install the only runtime dependency:**
+Four language variants are available — all produce identical output and accept the same flags:
 
-```bash
-npm install yaml   # already present if you have a Node.js project
-```
+| Script | Runtime | Dependency |
+|---|---|---|
+| `scripts/render.ts` | Node.js ≥ 18 + tsx | `npm install yaml` |
+| `scripts/render.jsx` | Node.js ≥ 18 + tsx | `npm install yaml react react-dom` |
+| `scripts/render.py` | Python ≥ 3.8 | `pip install pyyaml` |
+| `scripts/render.go` | Go ≥ 1.21 | `cd scripts && go mod download` |
 
 **Run against any CRD YAML:**
 
 ```bash
-# Single widget from a single-CRD file
+# TypeScript
 npx tsx scripts/render.ts my-crd.yaml --output my-crd.html
 
-# All CRDs from a multi-resource YAML (e.g. cert-manager bundle)
-npx tsx scripts/render.ts cert-manager.yaml --output cert-manager.html
+# JSX / React
+npx tsx scripts/render.jsx my-crd.yaml --output my-crd.html
 
-# Restrict to a specific schema version
-npx tsx scripts/render.ts gateway-api-crds.yaml --version v1 --output httproute.html
+# Python
+python scripts/render.py my-crd.yaml --output my-crd.html
 
-# Pipe to stdout
-npx tsx scripts/render.ts my-crd.yaml
+# Go (flags must precede the file path)
+cd scripts && go run render.go -output ../my-crd.html ../my-crd.yaml
 ```
 
-The script is entirely standalone — it only needs Node.js ≥ 18 and the `yaml` npm package. No knowledge of this repository's structure is required.
+All scripts accept:
+- `--output <file>` (or `-output` for Go) — write to a file instead of stdout
+- `--version <v1>` (or `-version` for Go) — render only a specific schema version
+
+Multi-document YAML bundles (e.g. cert-manager's install manifest) are supported;
+non-CRD documents are silently skipped.
 
 **Include in Hugo** with [`readFile`](https://gohugo.io/functions/os/readfile/):
 
