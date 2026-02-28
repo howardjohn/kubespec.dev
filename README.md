@@ -10,31 +10,39 @@
 
 ![](./screenshot.png)
 
-## Including API docs in Hugo (or any static site)
+## Generating API docs for Hugo (or any static site)
 
-The `render` script generates a self-contained HTML fragment for any API resource. The fragment embeds all its CSS (no external dependencies, no JavaScript required) so you can paste it directly into a Hugo template, shortcode, or content page.
+The `render` script generates self-contained HTML widgets from any CRD YAML file. The output embeds all CSS inline (no external dependencies, no JavaScript, no iframe) so you can paste it directly into Hugo content, shortcodes, or templates.
 
-**Kubernetes built-in resources**
-
-```bash
-npm run render -- kubernetes v1/Pod --output pod.html
-npm run render -- kubernetes apps/v1/Deployment --output deployment.html
-```
-
-**CRD-based projects**
+**Install the only runtime dependency:**
 
 ```bash
-npm run render -- cert-manager cert-manager.io/v1/Certificate --output certificate.html
-npm run render -- gateway-api gateway.networking.k8s.io/v1/HTTPRoute --output httproute.html
+npm install yaml   # already present if you have a Node.js project
 ```
 
-The output is a `<div class="ks-schema">…</div>` fragment. To include it in Hugo, pipe it into a [shortcode](https://gohugo.io/templates/shortcode-templates/) or use Hugo's [`readFile`](https://gohugo.io/functions/os/readfile/):
+**Run against any CRD YAML:**
+
+```bash
+# Single widget from a single-CRD file
+npx tsx scripts/render.ts my-crd.yaml --output my-crd.html
+
+# All CRDs from a multi-resource YAML (e.g. cert-manager bundle)
+npx tsx scripts/render.ts cert-manager.yaml --output cert-manager.html
+
+# Restrict to a specific schema version
+npx tsx scripts/render.ts gateway-api-crds.yaml --version v1 --output httproute.html
+
+# Pipe to stdout
+npx tsx scripts/render.ts my-crd.yaml
+```
+
+The script is entirely standalone — it only needs Node.js ≥ 18 and the `yaml` npm package. No knowledge of this repository's structure is required.
+
+**Include in Hugo** with [`readFile`](https://gohugo.io/functions/os/readfile/):
 
 ```go-html-template
-{{ readFile "content/api/pod.html" | safeHTML }}
+{{ readFile "content/api/my-crd.html" | safeHTML }}
 ```
-
-![kubespec widget rendered inline in a page](https://github.com/user-attachments/assets/ebc4107c-ca8c-4530-89be-fe244c3ba88e)
 
 ## Contributing
 
