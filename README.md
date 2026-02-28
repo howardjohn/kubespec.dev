@@ -10,6 +10,26 @@
 
 ![](./screenshot.png)
 
+## Embedding in Hugo (or any static site)
+
+Every API resource has a JavaScript-free embeddable page at `/embed/{project}/{group}/{version}/{kind}`.
+
+For Kubernetes built-in resources:
+
+```html
+<iframe src="https://kubespec.dev/embed/kubernetes/v1/Pod"
+        style="width:100%;border:none;min-height:600px"></iframe>
+```
+
+For CRD-based projects (e.g. cert-manager):
+
+```html
+<iframe src="https://kubespec.dev/embed/cert-manager/cert-manager.io/v1/Certificate"
+        style="width:100%;border:none;min-height:600px"></iframe>
+```
+
+The embed pages use only HTML `<details>`/`<summary>` elements — no JavaScript required.
+
 ## Contributing
 
 Contributions are welcome!

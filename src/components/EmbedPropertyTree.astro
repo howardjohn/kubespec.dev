@@ -1,0 +1,76 @@
+---
+import type { ResourceDefinition } from "@lib/kube";
+
+type Props = {
+  path?: string;
+  scope: string;
+  definition: ResourceDefinition;
+  level: number;
+};
+
+const { path, scope, definition, level } = Astro.props;
+
+function typeClass(type: string, hasChildren: boolean): string {
+  if (hasChildren) return "type-complex";
+  if (type === "string") return "type-string";
+  if (type === "boolean") return "type-boolean";
+  if (type === "integer") return "type-integer";
+  if (type === "Time" || type === "object") return "type-object";
+  return "type-other";
+}
+---
+
+<ul class={`prop-tree${level > 0 ? " nested" : ""}`}>
+  {
+    Object.entries(definition.properties || {}).map(([name, property]) => {
+      const propPath = `${path ?? ""}.${name}`;
+      const hasChildren =
+        Object.keys(property.definition?.properties || {}).length > 0;
+      const isRequired =
+        property.required ||
+        (scope === "Namespaced" && propPath === ".metadata.namespace");
+      const hasDesc = !!property.description;
+      const cls = typeClass(property.type, hasChildren);
+
+      return (
+        <li>
+          {hasChildren ? (
+            <details open={level === 0 && property.type !== "ObjectMeta"}>
+              <summary>
+                {isRequired && <span class="required">*</span>}
+                <span class={`prop-name${hasDesc ? " has-desc" : ""}`}>
+                  {name}
+                </span>
+                <span class={cls}>{property.type}</span>
+              </summary>
+              {hasDesc && <pre class="prop-desc">{property.description}</pre>}
+              {property.definition && (
+                <Astro.self
+                  scope={scope}
+                  path={propPath}
+                  definition={property.definition}
+                  level={level + 1}
+                />
+              )}
+            </details>
+          ) : hasDesc ? (
+            <details>
+              <summary>
+                {isRequired && <span class="required">*</span>}
+                <span class="prop-name has-desc">{name}</span>
+                <span class={cls}>{property.type}</span>
+              </summary>
+              <pre class="prop-desc">{property.description}</pre>
+            </details>
+          ) : (
+            <div style="padding: 0.125rem 0.25rem;">
+              {isRequired && <span class="required">*</span>}
+              <span class="prop-name">{name}</span>{" "}
+              <span class={cls}>{property.type}</span>
+            </div>
+          )}
+        </li>
+      );
+    })
+  }
+</ul>
