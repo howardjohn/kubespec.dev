@@ -1,25 +1,29 @@
-// kubespec render — generate self-contained HTML widgets from a CRD YAML file.
+// kubespec render — generate self-contained HTML widgets from either:
+// 1) a Kubernetes CRD YAML file, or
+// 2) a plain JSON Schema file (JSON or YAML).
 //
 // Entirely standalone: no dependency on the kubespec.dev project structure.
 // Any valid CRD YAML file (apiVersion: apiextensions.k8s.io/v1) can be used.
+// Any valid JSON Schema document can also be used directly.
 //
 // Usage:
 //
-//	go run render.go <crd.yaml> [-output file.html] [-version v1]
+//	go run render.go <schema.yaml|schema.json> [-output file.html] [-version v1]
 //
 // Examples:
 //
 //	go run render.go my-crd.yaml
 //	go run render.go cert-manager.yaml -output cert-manager.html
 //	go run render.go gateway-api-crds.yaml -version v1 -output httproute.html
+//	go run render.go schema.json -output schema.html
 //
-// If the YAML contains multiple CRDs (multi-document YAML), each one is rendered
-// and concatenated into the output.  Use -version to restrict to a single schema
-// version within each CRD.
+// If the YAML contains multiple CRDs or multiple JSON Schema docs, each one is
+// rendered and concatenated into the output. Use -version to restrict to a
+// single schema version within each CRD.
 //
 // Run from the scripts/ directory:
 //
-//	cd scripts && go run render.go <crd.yaml>
+//	cd scripts && go run render.go <schema.yaml|schema.json>
 package main
 
 import (
@@ -27,6 +31,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -54,8 +59,15 @@ type propertyMap struct {
 // schemaNode is a raw YAML node used to walk openAPIV3Schema while preserving
 // map key order via yaml.Node's Content field.
 func toPropertyMap(node *yaml.Node, parentRequired []string) *propertyMap {
+	return toPropertyMapWithResolver(node, parentRequired, nil, nil)
+}
+
+func toPropertyMapWithResolver(node *yaml.Node, parentRequired []string, resolver *schemaResolver, visiting map[*yaml.Node]bool) *propertyMap {
 	if node == nil {
 		return &propertyMap{props: map[string]propertyDef{}}
+	}
+	if visiting == nil {
+		visiting = map[*yaml.Node]bool{}
 	}
 
 	// Resolve aliases
@@ -63,12 +75,26 @@ func toPropertyMap(node *yaml.Node, parentRequired []string) *propertyMap {
 	if n.Kind == yaml.AliasNode {
 		n = n.Alias
 	}
+	local := n
+	n = resolveSchemaNode(n, resolver)
 	if n.Kind != yaml.MappingNode {
 		return &propertyMap{props: map[string]propertyDef{}}
 	}
 
 	// Build a flat map from the YAML mapping node (preserving key order)
 	raw := decodeMapping(n)
+	if resolver != nil {
+		// JSON Schema allows siblings next to $ref; local keys take precedence.
+		raw = mergeNodeMaps(decodeMapping(local), raw)
+	}
+	if visiting[n] {
+		return &propertyMap{
+			description: getString(raw, "description"),
+			props:       map[string]propertyDef{},
+		}
+	}
+	visiting[n] = true
+	defer delete(visiting, n)
 
 	pm := &propertyMap{
 		description: getString(raw, "description"),
@@ -86,8 +112,12 @@ func toPropertyMap(node *yaml.Node, parentRequired []string) *propertyMap {
 		propNode := propsNode.Content[i+1]
 		name := nameNode.Value
 
-		propRaw := decodeMapping(resolveAlias(propNode))
-		propType := getString(propRaw, "type")
+		resolvedPropNode := resolveSchemaNode(resolveAlias(propNode), resolver)
+		propRaw := decodeMapping(resolvedPropNode)
+		if resolver != nil {
+			propRaw = mergeNodeMaps(decodeMapping(resolveAlias(propNode)), propRaw)
+		}
+		propType := getTypeString(propRaw, "type")
 		isArray := propType == "array"
 		required := contains(parentRequired, name)
 		var def *propertyMap
@@ -96,20 +126,24 @@ func toPropertyMap(node *yaml.Node, parentRequired []string) *propertyMap {
 			itemsNode := getNode(propRaw, "items")
 			var itemType string
 			if itemsNode != nil {
-				itemsRaw := decodeMapping(resolveAlias(itemsNode))
-				itemType = getString(itemsRaw, "type")
+				resolvedItemsNode := resolveSchemaNode(resolveAlias(itemsNode), resolver)
+				itemsRaw := decodeMapping(resolvedItemsNode)
+				if resolver != nil {
+					itemsRaw = mergeNodeMaps(decodeMapping(resolveAlias(itemsNode)), itemsRaw)
+				}
+				itemType = getTypeString(itemsRaw, "type")
 				if itemType == "" {
 					itemType = "object"
 				}
 				if getNode(itemsRaw, "properties") != nil {
-					def = toPropertyMap(itemsNode, getStringSlice(itemsRaw, "required"))
+					def = toPropertyMapWithResolver(itemsNode, getStringSlice(itemsRaw, "required"), resolver, visiting)
 				}
 			} else {
 				itemType = "object"
 			}
 			propType = itemType + "[]"
 		} else if getNode(propRaw, "properties") != nil {
-			def = toPropertyMap(propNode, getStringSlice(propRaw, "required"))
+			def = toPropertyMapWithResolver(propNode, getStringSlice(propRaw, "required"), resolver, visiting)
 		} else if getBool(propRaw, "x-kubernetes-preserve-unknown-fields") {
 			if propType == "" {
 				propType = "object"
@@ -135,6 +169,10 @@ func toPropertyMap(node *yaml.Node, parentRequired []string) *propertyMap {
 
 type nodeMap = map[string]*yaml.Node
 
+type schemaResolver struct {
+	root *yaml.Node
+}
+
 func resolveAlias(n *yaml.Node) *yaml.Node {
 	if n != nil && n.Kind == yaml.AliasNode {
 		return n.Alias
@@ -153,6 +191,161 @@ func decodeMapping(n *yaml.Node) nodeMap {
 	return m
 }
 
+func mergeNodeMaps(primary, secondary nodeMap) nodeMap {
+	out := nodeMap{}
+	for k, v := range secondary {
+		out[k] = v
+	}
+	for k, v := range primary {
+		out[k] = v
+	}
+	return out
+}
+
+func resolveSchemaNode(node *yaml.Node, resolver *schemaResolver) *yaml.Node {
+	return resolveSchemaNodeWithState(resolveAlias(node), resolver, map[*yaml.Node]bool{}, 0)
+}
+
+func resolveSchemaNodeWithState(node *yaml.Node, resolver *schemaResolver, seen map[*yaml.Node]bool, depth int) *yaml.Node {
+	n := resolveAlias(node)
+	if n == nil || resolver == nil {
+		return n
+	}
+	if n.Kind != yaml.MappingNode {
+		return n
+	}
+	if depth > 64 || seen[n] {
+		return n
+	}
+	seen[n] = true
+	defer delete(seen, n)
+
+	raw := decodeMapping(n)
+
+	// Resolve direct $ref chains first.
+	if ref := getString(raw, "$ref"); ref != "" {
+		resolved := resolver.resolveRef(ref)
+		if resolved != nil {
+			return resolveSchemaNodeWithState(resolved, resolver, seen, depth+1)
+		}
+	}
+
+	// For nullable unions like anyOf:[{$ref:...},{type:null}], pick the best
+	// non-null branch so fields become visible in the tree.
+	for _, key := range []string{"anyOf", "oneOf"} {
+		alts := getNode(raw, key)
+		if alts == nil || alts.Kind != yaml.SequenceNode {
+			continue
+		}
+		best := (*yaml.Node)(nil)
+		bestScore := -1
+		for _, alt := range alts.Content {
+			candidate := resolveSchemaNodeWithState(alt, resolver, seen, depth+1)
+			if candidate == nil || candidate.Kind != yaml.MappingNode {
+				continue
+			}
+			candidateRaw := decodeMapping(candidate)
+			t := getTypeString(candidateRaw, "type")
+			if t == "null" {
+				continue
+			}
+			score := 0
+			if getNode(candidateRaw, "properties") != nil {
+				score += 4
+			}
+			if getNode(candidateRaw, "items") != nil {
+				score += 3
+			}
+			if t != "" {
+				score += 2
+			}
+			if getString(candidateRaw, "$ref") != "" {
+				score++
+			}
+			if score > bestScore {
+				bestScore = score
+				best = candidate
+			}
+		}
+		if best != nil {
+			return best
+		}
+	}
+
+	// allOf usually composes multiple schemas; for rendering we pick the first
+	// branch that contributes concrete shape information.
+	allOf := getNode(raw, "allOf")
+	if allOf != nil && allOf.Kind == yaml.SequenceNode {
+		for _, alt := range allOf.Content {
+			candidate := resolveSchemaNodeWithState(alt, resolver, seen, depth+1)
+			if candidate == nil || candidate.Kind != yaml.MappingNode {
+				continue
+			}
+			candidateRaw := decodeMapping(candidate)
+			if getNode(candidateRaw, "properties") != nil || getNode(candidateRaw, "items") != nil || getTypeString(candidateRaw, "type") != "" {
+				return candidate
+			}
+		}
+	}
+
+	return n
+}
+
+func (r *schemaResolver) resolveRef(ref string) *yaml.Node {
+	if r == nil || r.root == nil || ref == "" {
+		return nil
+	}
+	if !strings.HasPrefix(ref, "#") {
+		// External refs are intentionally not resolved in this standalone script.
+		return nil
+	}
+
+	n := r.root
+	if n.Kind == yaml.DocumentNode && len(n.Content) > 0 {
+		n = n.Content[0]
+	}
+	if ref == "#" {
+		return resolveAlias(n)
+	}
+	if !strings.HasPrefix(ref, "#/") {
+		return nil
+	}
+
+	cur := resolveAlias(n)
+	for _, token := range strings.Split(ref[2:], "/") {
+		key := decodeJSONPointerToken(token)
+		switch cur.Kind {
+		case yaml.MappingNode:
+			next := (*yaml.Node)(nil)
+			for i := 0; i+1 < len(cur.Content); i += 2 {
+				if cur.Content[i].Value == key {
+					next = cur.Content[i+1]
+					break
+				}
+			}
+			if next == nil {
+				return nil
+			}
+			cur = resolveAlias(next)
+		case yaml.SequenceNode:
+			idx, err := strconv.Atoi(key)
+			if err != nil || idx < 0 || idx >= len(cur.Content) {
+				return nil
+			}
+			cur = resolveAlias(cur.Content[idx])
+		default:
+			return nil
+		}
+	}
+	return cur
+}
+
+func decodeJSONPointerToken(token string) string {
+	token = strings.ReplaceAll(token, "~1", "/")
+	token = strings.ReplaceAll(token, "~0", "~")
+	return token
+}
+
 func getNode(m nodeMap, key string) *yaml.Node {
 	if v, ok := m[key]; ok {
 		return resolveAlias(v)
@@ -166,6 +359,40 @@ func getString(m nodeMap, key string) string {
 		return n.Value
 	}
 	return ""
+}
+
+func getTypeString(m nodeMap, key string) string {
+	n := getNode(m, key)
+	if n == nil {
+		return ""
+	}
+	if n.Kind == yaml.ScalarNode {
+		return n.Value
+	}
+	if n.Kind != yaml.SequenceNode {
+		return ""
+	}
+
+	var types []string
+	for _, item := range n.Content {
+		if item.Kind != yaml.ScalarNode {
+			continue
+		}
+		t := item.Value
+		if t == "null" {
+			continue
+		}
+		types = append(types, t)
+	}
+	if len(types) == 0 {
+		for _, item := range n.Content {
+			if item.Kind == yaml.ScalarNode {
+				return item.Value
+			}
+		}
+		return ""
+	}
+	return strings.Join(types, "|")
 }
 
 func getBool(m nodeMap, key string) bool {
@@ -391,14 +618,19 @@ func renderWidget(kind, group, version, scope string, pm *propertyMap) string {
 	scopeLabel := "Cluster-scoped Resource"
 	if scope == "Namespaced" {
 		scopeLabel = "Namespaced Resource"
+	} else if scope == "Schema" {
+		scopeLabel = "JSON Schema"
 	}
-	parts := []string{}
-	for _, p := range []string{group, version, kind} {
-		if p != "" {
-			parts = append(parts, p)
+	canonicalURL := ""
+	if scope != "Schema" {
+		parts := []string{}
+		for _, p := range []string{group, version, kind} {
+			if p != "" {
+				parts = append(parts, p)
+			}
 		}
+		canonicalURL = "https://kubespec.dev/" + strings.Join(parts, "/")
 	}
-	canonicalURL := "https://kubespec.dev/" + strings.Join(parts, "/")
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "<!-- kubespec widget: %s (%s) -->\n", esc(kind), esc(apiVersion))
@@ -414,9 +646,11 @@ func renderWidget(kind, group, version, scope string, pm *propertyMap) string {
 	b.WriteString("</div>\n")
 	renderTree(pm, scope, 0, "", &b)
 	b.WriteString("\n")
-	b.WriteString(`<div class="ks-footer">` + "\n")
-	fmt.Fprintf(&b, `  View full docs on <a href="%s" target="_blank" rel="noopener">kubespec.dev ↗</a>`+"\n", esc(canonicalURL))
-	b.WriteString("</div>\n")
+	if canonicalURL != "" {
+		b.WriteString(`<div class="ks-footer">` + "\n")
+		fmt.Fprintf(&b, `  View full docs on <a href="%s" target="_blank" rel="noopener">kubespec.dev ↗</a>`+"\n", esc(canonicalURL))
+		b.WriteString("</div>\n")
+	}
 	b.WriteString("</div>")
 	return b.String()
 }
@@ -457,6 +691,64 @@ func (d crdDocument) mapping() nodeMap {
 	return decodeMapping(n)
 }
 
+func (d crdDocument) rootMappingNode() *yaml.Node {
+	n := d.root
+	if n.Kind == yaml.DocumentNode && len(n.Content) > 0 {
+		n = n.Content[0]
+	}
+	return resolveAlias(n)
+}
+
+func isCRD(m nodeMap) bool {
+	kind := getString(m, "kind")
+	if kind != "CustomResourceDefinition" {
+		return false
+	}
+	apiVer := getString(m, "apiVersion")
+	return strings.HasPrefix(apiVer, "apiextensions.k8s.io/")
+}
+
+func looksLikeJSONSchema(m nodeMap) bool {
+	if getString(m, "$schema") != "" {
+		return true
+	}
+	if getNode(m, "properties") != nil {
+		return true
+	}
+	if getNode(m, "$defs") != nil || getNode(m, "definitions") != nil {
+		return true
+	}
+	if getNode(m, "allOf") != nil || getNode(m, "oneOf") != nil || getNode(m, "anyOf") != nil {
+		return true
+	}
+	t := getTypeString(m, "type")
+	return t != "" && (getString(m, "title") != "" || getNode(m, "required") != nil)
+}
+
+func renderJSONSchemaWidget(doc crdDocument) (string, bool) {
+	m := doc.mapping()
+	if !looksLikeJSONSchema(m) {
+		return "", false
+	}
+
+	title := getString(m, "title")
+	if title == "" {
+		title = "JSON Schema"
+	}
+	schemaVersion := getString(m, "$schema")
+	if schemaVersion == "" {
+		schemaVersion = "json-schema"
+	}
+	required := getStringSlice(m, "required")
+
+	root := doc.rootMappingNode()
+	if root == nil || root.Kind != yaml.MappingNode {
+		return "", false
+	}
+	pm := toPropertyMapWithResolver(root, required, &schemaResolver{root: root}, nil)
+	return renderWidget(title, "", schemaVersion, "Schema", pm), true
+}
+
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
@@ -466,14 +758,15 @@ func main() {
 	versionFilter := flag.String("version", "", "Only render a specific schema `VERSION` (e.g. v1)")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr,
-			"Usage: go run render.go [flags] <crd.yaml>\n\n"+
+			"Usage: go run render.go [flags] <schema.yaml|schema.json>\n\n"+
 				"Flags:\n")
 		flag.PrintDefaults()
 		fmt.Fprintf(os.Stderr,
 			"\nExamples:\n"+
 				"  go run render.go my-crd.yaml\n"+
 				"  go run render.go cert-manager.yaml -output cert-manager.html\n"+
-				"  go run render.go gateway-crds.yaml -version v1 -output httproute.html\n")
+				"  go run render.go gateway-crds.yaml -version v1 -output httproute.html\n"+
+				"  go run render.go schema.json -output schema.html\n")
 	}
 	flag.Parse()
 
@@ -496,12 +789,10 @@ func main() {
 	for _, doc := range docs {
 		m := doc.mapping()
 
-		kind := getString(m, "kind")
-		if kind != "CustomResourceDefinition" {
-			continue
-		}
-		apiVer := getString(m, "apiVersion")
-		if !strings.HasPrefix(apiVer, "apiextensions.k8s.io/") {
+		if !isCRD(m) {
+			if widget, ok := renderJSONSchemaWidget(doc); ok {
+				widgets = append(widgets, widget)
+			}
 			continue
 		}
 
@@ -556,10 +847,10 @@ func main() {
 
 	if len(widgets) == 0 {
 		fmt.Fprintf(os.Stderr,
-			"No CRDs found in %s.\n"+
-				"Make sure the file contains at least one document with:\n"+
-				"  apiVersion: apiextensions.k8s.io/v1\n"+
-				"  kind: CustomResourceDefinition\n",
+			"No CRDs or JSON Schemas found in %s.\n"+
+				"Expected one of:\n"+
+				"  1) A CRD document with apiVersion: apiextensions.k8s.io/v1 and kind: CustomResourceDefinition\n"+
+				"  2) A plain JSON Schema document (for example containing $schema/properties/type)\n",
 			inputFile)
 		os.Exit(1)
 	}
