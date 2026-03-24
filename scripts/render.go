@@ -565,6 +565,29 @@ func renderValidationDetails(items []validationItem) string {
 	return b.String()
 }
 
+func renderFieldPanel(nodeID, path string, prop propertyDef, isRequired bool) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, `<template data-ks-field-panel="%s">`, esc(nodeID))
+	b.WriteString(`<div class="ks-detail-card">`)
+	fmt.Fprintf(&b, `<div class="ks-detail-path">%s</div>`, esc(path))
+	b.WriteString(`<div class="ks-detail-meta-line">`)
+	fmt.Fprintf(&b, `<span class="ks-detail-type %s">%s</span>`, typeClass(prop.propType, prop.definition != nil && len(prop.definition.keys) > 0), esc(prop.propType))
+	if isRequired {
+		b.WriteString(`<span class="ks-detail-required">Required</span>`)
+	}
+	b.WriteString(`</div>`)
+	if prop.description != "" {
+		fmt.Fprintf(&b, `<div class="ks-detail-desc">%s</div>`, esc(prop.description))
+	} else {
+		b.WriteString(`<div class="ks-detail-empty">No description for this field.</div>`)
+	}
+	if validationHTML := renderValidationDetails(prop.validation); validationHTML != "" {
+		b.WriteString(validationHTML)
+	}
+	b.WriteString(`</div></template>`)
+	return b.String()
+}
+
 // ---------------------------------------------------------------------------
 // HTML rendering
 // ---------------------------------------------------------------------------
@@ -602,7 +625,7 @@ type searchEntry struct {
 	propType string
 }
 
-func renderTree(pm *propertyMap, scope string, level int, path, widgetID string, counter *int, searchIndex *[]searchEntry, b *strings.Builder) {
+func renderTree(pm *propertyMap, scope string, level int, path, widgetID string, counter *int, searchIndex *[]searchEntry, panelTemplates *[]string, b *strings.Builder) {
 	if pm == nil || len(pm.keys) == 0 {
 		return
 	}
@@ -620,7 +643,6 @@ func renderTree(pm *propertyMap, scope string, level int, path, widgetID string,
 		hasChildren := prop.definition != nil && len(prop.definition.keys) > 0
 		isRequired := prop.required || (scope == "Namespaced" && propPath == ".metadata.namespace")
 		nodeID := fmt.Sprintf("%s-node-%d", widgetID, *counter)
-		metaID := nodeID + "-meta"
 		childrenID := nodeID + "-children"
 		*counter++
 		*searchIndex = append(*searchIndex, searchEntry{
@@ -635,41 +657,22 @@ func renderTree(pm *propertyMap, scope string, level int, path, widgetID string,
 		}
 		typeCls := typeClass(prop.propType, hasChildren)
 		typeHTML := fmt.Sprintf(`<span class="ks-type %s">%s</span>`, typeCls, esc(prop.propType))
-		var metaParts []string
-		if prop.description != "" {
-			metaParts = append(metaParts, fmt.Sprintf(`<div class="ks-desc">%s</div>`, esc(prop.description)))
-		}
-		if validationHTML := renderValidationDetails(prop.validation); validationHTML != "" {
-			metaParts = append(metaParts, validationHTML)
-		}
-		hasMeta := len(metaParts) > 0
-		nameClickable := ""
-		if hasMeta {
-			nameClickable = " is-clickable"
-		}
 		typeControl := fmt.Sprintf(`<span class="ks-type-toggle">%s</span>`, typeHTML)
 		if hasChildren {
 			typeControl = fmt.Sprintf(`<button type="button" class="ks-type-toggle is-clickable" data-ks-children-target="%s">%s</button>`,
 				esc(childrenID), typeHTML)
 		}
+		*panelTemplates = append(*panelTemplates, renderFieldPanel(nodeID, searchPath, prop, isRequired))
 
 		fmt.Fprintf(b, `<li class="ks-row" data-ks-path="%s">`, esc(searchPath))
 		fmt.Fprintf(b, `<div class="ks-row-line" id="%s" data-ks-node-id="%s" data-ks-path="%s">`, esc(nodeID), esc(nodeID), esc(searchPath))
-		if hasMeta {
-			fmt.Fprintf(b, `<button type="button" class="ks-name-toggle%s" data-ks-meta-target="%s">%s<span class="ks-name">%s</span></button>`,
-				nameClickable, esc(metaID), reqMark, esc(name))
-		} else {
-			fmt.Fprintf(b, `<span class="ks-name-toggle">%s<span class="ks-name">%s</span></span>`,
-				reqMark, esc(name))
-		}
+		fmt.Fprintf(b, `<span class="ks-name-toggle">%s<span class="ks-name">%s</span></span>`,
+			reqMark, esc(name))
 		b.WriteString(typeControl)
 		b.WriteString(`</div>`)
-		if hasMeta {
-			fmt.Fprintf(b, `<div class="ks-meta" id="%s" data-ks-meta hidden>%s</div>`, esc(metaID), strings.Join(metaParts, ""))
-		}
 		if hasChildren && prop.definition != nil {
 			fmt.Fprintf(b, `<div class="ks-children-container" id="%s" data-ks-children-container hidden>`, esc(childrenID))
-			renderTree(prop.definition, scope, level+1, propPath, widgetID, counter, searchIndex, b)
+			renderTree(prop.definition, scope, level+1, propPath, widgetID, counter, searchIndex, panelTemplates, b)
 			b.WriteString(`</div>`)
 		}
 		b.WriteString("</li>\n")
@@ -726,14 +729,6 @@ const css = `.ks-schema {
   letter-spacing: 0.01em;
   color: #0f766e;
   margin-bottom: 0.4rem;
-}
-.ks-kind {
-  font-size: 1.875rem;
-  font-weight: 700;
-  margin: 0;
-  line-height: 1.2;
-  letter-spacing: -0.02em;
-  color: #020617;
 }
 .ks-resource-desc {
   margin: 0.75rem 0 1rem;
@@ -815,6 +810,75 @@ const css = `.ks-schema {
   font-size: 0.8125rem;
   color: #475569;
 }
+.ks-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 2.35fr) minmax(20rem, clamp(18rem, 24vw, 30rem));
+  gap: 1.25rem;
+  align-items: start;
+}
+.ks-tree-pane {
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: visible;
+  overscroll-behavior-x: contain;
+}
+.ks-detail-pane {
+  position: sticky;
+  top: var(--ks-sticky-top, 1rem);
+  max-height: calc(100vh - var(--ks-sticky-top, 1rem) - 1rem);
+  overflow: auto;
+}
+.ks-detail-card {
+  padding: 0.9rem 1rem;
+  border: 1px solid #dbe2ea;
+  border-radius: 0.9rem;
+  background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+  box-shadow: 0 14px 36px rgba(15, 23, 42, 0.08);
+}
+.ks-detail-path {
+  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: #0f172a;
+  word-break: break-word;
+}
+.ks-detail-meta-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: center;
+  margin-top: 0.55rem;
+}
+.ks-detail-type {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.16rem 0.5rem;
+  border-radius: 999px;
+  background: #eef2ff;
+  font-size: 0.74rem;
+  font-weight: 700;
+}
+.ks-detail-required {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.16rem 0.5rem;
+  border-radius: 999px;
+  background: #fff1f2;
+  color: #be123c;
+  font-size: 0.74rem;
+  font-weight: 700;
+}
+.ks-detail-desc,
+.ks-detail-empty {
+  margin-top: 0.8rem;
+  font-size: 0.82rem;
+  line-height: 1.65;
+  color: #334155;
+  white-space: pre-wrap;
+}
+.ks-detail-empty {
+  color: #64748b;
+}
 .ks-tree {
   list-style: none;
   margin: 0;
@@ -823,8 +887,8 @@ const css = `.ks-schema {
   font-size: 0.8125rem;
 }
 .ks-tree.ks-nested {
-  margin-left: 1rem;
-  padding-left: 0.625rem;
+  margin-left: 0.5rem;
+  padding-left: 0.3125rem;
   border-left: 2px solid #cbd5e1;
 }
 .ks-row { font-weight: 600; }
@@ -834,8 +898,12 @@ const css = `.ks-schema {
   align-items: baseline;
   gap: 0.25rem;
   padding: 0.125rem 0.375rem;
+  border-radius: 0.35rem;
+  cursor: pointer;
 }
-.ks-row-line.ks-search-hit { background: #99f6e4; border-radius: 0.25rem; }
+.ks-row-line:hover { background: #f8fafc; }
+.ks-row-line.is-active { background: #ccfbf1; }
+.ks-row-line.ks-search-hit { background: #99f6e4; }
 .ks-name-toggle,
 .ks-type-toggle {
   display: inline-flex;
@@ -869,27 +937,10 @@ const css = `.ks-schema {
 .ks-type-object  { color: #7c3aed; }
 .ks-type-complex { color: #db2777; }
 .ks-type-other   { color: #0f766e; }
-.ks-meta {
-  margin: 0.35rem 0 0.65rem 0.375rem;
-  padding: 0.6rem 0.75rem;
-  border-radius: 0.65rem;
-  background: #f8fafc;
-  max-width: 48rem;
-  box-shadow: inset 0 0 0 1px rgba(203, 213, 225, 0.55);
-}
-.ks-desc {
-  margin: 0;
-  font-size: 0.75rem;
-  font-weight: 400;
-  font-family: system-ui, sans-serif;
-  white-space: pre-wrap;
-  color: #334155;
-}
-.ks-hide-desc > .ks-meta { display: none; }
 .ks-validation {
-  margin-top: 0.55rem;
+  margin-top: 0.8rem;
   border-top: 1px solid #dbe2ea;
-  padding-top: 0.45rem;
+  padding-top: 0.65rem;
 }
 .ks-validation-summary {
   display: flex;
@@ -942,6 +993,14 @@ const css = `.ks-schema {
   border-radius: 0;
   padding: 0;
 }
+@media (max-width: 900px) {
+  .ks-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .ks-detail-pane {
+    position: static;
+  }
+}
 `
 
 func renderSearchScript(hostID, templateID string, searchIndex []searchEntry) string {
@@ -981,28 +1040,29 @@ func renderSearchScript(hostID, templateID string, searchIndex []searchEntry) st
   const entries = %s;
   const input = shadow.querySelector("[data-ks-search-input]");
   const results = shadow.querySelector("[data-ks-search-results]");
+  const detailPanel = shadow.querySelector("[data-ks-active-panel]");
   if (!input || !results || entries.length === 0) {
     return;
   }
   const nodeByID = new Map();
-  const metaByID = new Map();
   const childrenByID = new Map();
+  const panelTemplateByID = new Map();
   shadow.querySelectorAll("[data-ks-node-id]").forEach((element) => {
     nodeByID.set(element.getAttribute("data-ks-node-id"), element);
-  });
-  shadow.querySelectorAll("[data-ks-meta]").forEach((element) => {
-    metaByID.set(element.id, element);
   });
   shadow.querySelectorAll("[data-ks-children-container]").forEach((element) => {
     childrenByID.set(element.id, element);
   });
+  shadow.querySelectorAll("[data-ks-field-panel]").forEach((element) => {
+    panelTemplateByID.set(element.getAttribute("data-ks-field-panel"), element);
+  });
   const entryByPath = new Map(entries.map((entry) => [normalize(entry.path), entry]));
-  const metaButtons = shadow.querySelectorAll("[data-ks-meta-target]");
   const typeButtons = shadow.querySelectorAll("[data-ks-children-target]");
 
   let matches = [];
   let activeIndex = -1;
   let highlightTimer = 0;
+  let activeNodeId = "";
 
   function normalize(value) {
     return value.toLowerCase().trim().replace(/^\./, "");
@@ -1141,6 +1201,28 @@ func renderSearchScript(hostID, templateID string, searchIndex []searchEntry) st
     });
   }
 
+  function setActiveNode(entry) {
+    if (!entry) {
+      return;
+    }
+    if (activeNodeId) {
+      const current = nodeByID.get(activeNodeId);
+      if (current) {
+        current.classList.remove("is-active");
+      }
+    }
+    const next = nodeByID.get(entry.nodeId);
+    if (!next) {
+      return;
+    }
+    next.classList.add("is-active");
+    activeNodeId = entry.nodeId;
+    if (detailPanel) {
+      const panelTemplate = panelTemplateByID.get(entry.nodeId);
+      detailPanel.innerHTML = panelTemplate ? panelTemplate.innerHTML : "";
+    }
+  }
+
   function revealNode(node) {
     let current = node;
     while (current && current !== root) {
@@ -1170,6 +1252,7 @@ func renderSearchScript(hostID, templateID string, searchIndex []searchEntry) st
       return;
     }
     revealNode(node);
+    setActiveNode(entry);
     clearHighlight();
     node.classList.add("ks-search-hit");
     window.clearTimeout(highlightTimer);
@@ -1187,27 +1270,32 @@ func renderSearchScript(hostID, templateID string, searchIndex []searchEntry) st
   function selectHashTarget() {
     const rawHash = window.location.hash.replace(/^#/, "");
     if (!rawHash) {
+      if (entries.length > 0) {
+        selectEntry(entries[0], { scroll: false });
+      }
       return;
     }
     const entry = entryByPath.get(normalize(decodeURIComponent(rawHash)));
     if (entry) {
       selectEntry(entry);
+      return;
+    }
+    if (entries.length > 0) {
+      selectEntry(entries[0], { scroll: false });
     }
   }
 
-  function toggleSubtree(control, mode) {
+  function toggleSubtree(control) {
     const row = control.closest(".ks-row");
     if (!row) {
       return;
     }
     const childContainers = Array.from(row.querySelectorAll("[data-ks-children-container]"));
-    const metaContainers = Array.from(row.querySelectorAll("[data-ks-meta]"));
-    const toggled = mode === "meta" ? metaContainers : childContainers;
-    if (toggled.length === 0) {
+    if (childContainers.length === 0) {
       return;
     }
-    const shouldOpen = toggled.some((candidate) => candidate.hasAttribute("hidden"));
-    toggled.forEach((candidate) => {
+    const shouldOpen = childContainers.some((candidate) => candidate.hasAttribute("hidden"));
+    childContainers.forEach((candidate) => {
       candidate.hidden = !shouldOpen;
     });
   }
@@ -1262,26 +1350,12 @@ func renderSearchScript(hostID, templateID string, searchIndex []searchEntry) st
       hideResults();
     }
   });
-  metaButtons.forEach((metaButton) => {
-    metaButton.addEventListener("click", (event) => {
-      event.stopPropagation();
-      if (event.ctrlKey || event.metaKey) {
-        event.preventDefault();
-        toggleSubtree(metaButton, "meta");
-        return;
-      }
-      const meta = metaByID.get(metaButton.getAttribute("data-ks-meta-target"));
-      if (meta) {
-        meta.hidden = !meta.hidden;
-      }
-    });
-  });
   typeButtons.forEach((typeButton) => {
     typeButton.addEventListener("click", (event) => {
       event.stopPropagation();
       if (event.ctrlKey || event.metaKey) {
         event.preventDefault();
-        toggleSubtree(typeButton, "children");
+        toggleSubtree(typeButton);
         return;
       }
       const children = childrenByID.get(typeButton.getAttribute("data-ks-children-target"));
@@ -1307,6 +1381,10 @@ func renderSearchScript(hostID, templateID string, searchIndex []searchEntry) st
       return;
     }
     setHash(path);
+    const entry = entryByPath.get(normalize(path));
+    if (entry) {
+      selectEntry(entry, { scroll: false });
+    }
   });
   window.addEventListener("hashchange", selectHashTarget);
   selectHashTarget();
@@ -1327,6 +1405,7 @@ func renderWidget(kind, group, version, scope string, pm *propertyMap, widgetID 
 
 	var b strings.Builder
 	searchIndex := make([]searchEntry, 0, 64)
+	panelTemplates := make([]string, 0, 64)
 	nodeCounter := 0
 	templateID := widgetID + "-template"
 	fmt.Fprintf(&b, "<!-- kubespec widget: %s (%s) -->\n", esc(kind), esc(apiVersion))
@@ -1336,13 +1415,20 @@ func renderWidget(kind, group, version, scope string, pm *propertyMap, widgetID 
 	b.WriteString(`<div class="ks-schema">` + "\n")
 	b.WriteString(`<div class="ks-header">` + "\n")
 	fmt.Fprintf(&b, `  <div class="ks-apiversion">%s</div>`+"\n", esc(apiVersion))
-	fmt.Fprintf(&b, `  <h2 class="ks-kind">%s</h2>`+"\n", esc(kind))
 	if pm.description != "" {
 		fmt.Fprintf(&b, `  <div class="ks-resource-desc">%s</div>`+"\n", esc(pm.description))
 	}
 	fmt.Fprintf(&b, `  <div class="ks-search"><input class="ks-search-input" type="search" placeholder="Search fields like spec.template.spec.containers" autocomplete="off" spellcheck="false" aria-label="Search schema fields" data-ks-search-input /><div class="ks-search-results" data-ks-search-results hidden></div></div>`+"\n")
 	b.WriteString("</div>\n")
-	renderTree(pm, scope, 0, "", widgetID, &nodeCounter, &searchIndex, &b)
+	b.WriteString(`<div class="ks-layout">` + "\n")
+	b.WriteString(`<div class="ks-tree-pane">` + "\n")
+	renderTree(pm, scope, 0, "", widgetID, &nodeCounter, &searchIndex, &panelTemplates, &b)
+	b.WriteString(`</div>` + "\n")
+	b.WriteString(`<aside class="ks-detail-pane"><div data-ks-active-panel></div></aside>` + "\n")
+	b.WriteString(`</div>` + "\n")
+	for _, panelTemplate := range panelTemplates {
+		b.WriteString(panelTemplate + "\n")
+	}
 	b.WriteString("\n")
 	b.WriteString("</div>\n")
 	b.WriteString("</template>\n")
