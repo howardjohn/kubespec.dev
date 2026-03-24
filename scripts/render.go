@@ -926,6 +926,7 @@ func renderSearchScript(widgetID string, searchIndex []searchEntry) string {
   if (!input || !results || entries.length === 0) {
     return;
   }
+  const entryByPath = new Map(entries.map((entry) => [normalize(entry.path), entry]));
 
   let matches = [];
   let activeIndex = -1;
@@ -1078,7 +1079,20 @@ func renderSearchScript(widgetID string, searchIndex []searchEntry) string {
     }
   }
 
-  function selectEntry(entry) {
+  function setHash(path) {
+    const nextHash = "#" + encodeURIComponent(path);
+    if (window.location.hash === nextHash) {
+      return;
+    }
+    if (window.history && typeof window.history.replaceState === "function") {
+      window.history.replaceState(null, "", nextHash);
+      return;
+    }
+    window.location.hash = path;
+  }
+
+  function selectEntry(entry, options = {}) {
+    const { updateHash = false, scroll = true } = options;
     const node = document.getElementById(entry.nodeId);
     if (!node) {
       return;
@@ -1088,9 +1102,25 @@ func renderSearchScript(widgetID string, searchIndex []searchEntry) string {
     node.classList.add("ks-search-hit");
     window.clearTimeout(highlightTimer);
     highlightTimer = window.setTimeout(clearHighlight, 1800);
-    node.scrollIntoView({ behavior: "smooth", block: "center" });
+    if (scroll) {
+      node.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
     input.value = entry.path;
     hideResults();
+    if (updateHash) {
+      setHash(entry.path);
+    }
+  }
+
+  function selectHashTarget() {
+    const rawHash = window.location.hash.replace(/^#/, "");
+    if (!rawHash) {
+      return;
+    }
+    const entry = entryByPath.get(normalize(decodeURIComponent(rawHash)));
+    if (entry) {
+      selectEntry(entry);
+    }
   }
 
   function toggleSubtree(summary, includeDescriptions) {
@@ -1176,6 +1206,21 @@ func renderSearchScript(widgetID string, searchIndex []searchEntry) string {
   });
   root.addEventListener("click", (event) => {
     const target = event.target;
+    const selectable = target instanceof Element ? target.closest(".ks-summary, .ks-leaf-line") : null;
+    if (!selectable || !root.contains(selectable)) {
+      return;
+    }
+    const path = selectable.getAttribute("data-ks-path");
+    if (!path) {
+      return;
+    }
+    if (event.ctrlKey || event.metaKey) {
+      return;
+    }
+    setHash(path);
+  });
+  root.addEventListener("click", (event) => {
+    const target = event.target;
     const summary = target instanceof Element ? target.closest("summary.ks-summary") : null;
     if (!summary || !root.contains(summary)) {
       return;
@@ -1186,6 +1231,8 @@ func renderSearchScript(widgetID string, searchIndex []searchEntry) string {
     event.preventDefault();
     toggleSubtree(summary, event.shiftKey);
   });
+  window.addEventListener("hashchange", selectHashTarget);
+  selectHashTarget();
 })();
 </script>`,
 		strconv.Quote(widgetID),
