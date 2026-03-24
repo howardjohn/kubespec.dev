@@ -620,6 +620,8 @@ func renderTree(pm *propertyMap, scope string, level int, path, widgetID string,
 		hasChildren := prop.definition != nil && len(prop.definition.keys) > 0
 		isRequired := prop.required || (scope == "Namespaced" && propPath == ".metadata.namespace")
 		nodeID := fmt.Sprintf("%s-node-%d", widgetID, *counter)
+		metaID := nodeID + "-meta"
+		childrenID := nodeID + "-children"
 		*counter++
 		*searchIndex = append(*searchIndex, searchEntry{
 			nodeID:   nodeID,
@@ -633,7 +635,6 @@ func renderTree(pm *propertyMap, scope string, level int, path, widgetID string,
 		}
 		typeCls := typeClass(prop.propType, hasChildren)
 		typeHTML := fmt.Sprintf(`<span class="ks-type %s">%s</span>`, typeCls, esc(prop.propType))
-		metaHTML := ""
 		var metaParts []string
 		if prop.description != "" {
 			metaParts = append(metaParts, fmt.Sprintf(`<div class="ks-desc">%s</div>`, esc(prop.description)))
@@ -641,27 +642,37 @@ func renderTree(pm *propertyMap, scope string, level int, path, widgetID string,
 		if validationHTML := renderValidationDetails(prop.validation); validationHTML != "" {
 			metaParts = append(metaParts, validationHTML)
 		}
-		if len(metaParts) > 0 {
-			metaHTML = `<div class="ks-meta">` + strings.Join(metaParts, "") + `</div>`
+		hasMeta := len(metaParts) > 0
+		nameClickable := ""
+		if hasMeta {
+			nameClickable = " is-clickable"
+		}
+		typeControl := fmt.Sprintf(`<span class="ks-type-toggle">%s</span>`, typeHTML)
+		if hasChildren {
+			typeControl = fmt.Sprintf(`<button type="button" class="ks-type-toggle is-clickable" data-ks-children-target="%s">%s</button>`,
+				esc(childrenID), typeHTML)
 		}
 
-		if hasChildren || metaHTML != "" {
-			openAttr := ""
-			if level == 0 && hasChildren {
-				openAttr = " open"
-			}
-			fmt.Fprintf(b, `<li class="ks-row" data-ks-path="%s"><details%s data-ks-has-children="%t" data-ks-has-description="%t">`, esc(searchPath), openAttr, hasChildren, metaHTML != "")
-			fmt.Fprintf(b, `<summary class="ks-summary" id="%s" data-ks-node-id="%s" data-ks-path="%s">%s<span class="ks-name">%s</span>%s</summary>`,
-				esc(nodeID), esc(nodeID), esc(searchPath), reqMark, esc(name), typeHTML)
-			b.WriteString(metaHTML)
-			if hasChildren && prop.definition != nil {
-				renderTree(prop.definition, scope, level+1, propPath, widgetID, counter, searchIndex, b)
-			}
-			b.WriteString("</details></li>\n")
+		fmt.Fprintf(b, `<li class="ks-row" data-ks-path="%s">`, esc(searchPath))
+		fmt.Fprintf(b, `<div class="ks-row-line" id="%s" data-ks-node-id="%s" data-ks-path="%s">`, esc(nodeID), esc(nodeID), esc(searchPath))
+		if hasMeta {
+			fmt.Fprintf(b, `<button type="button" class="ks-name-toggle%s" data-ks-meta-target="%s">%s<span class="ks-name">%s</span></button>`,
+				nameClickable, esc(metaID), reqMark, esc(name))
 		} else {
-			fmt.Fprintf(b, `<li class="ks-row ks-leaf" data-ks-path="%s"><span class="ks-leaf-line" id="%s" data-ks-node-id="%s" data-ks-path="%s">%s<span class="ks-name">%s</span>%s</span></li>`+"\n",
-				esc(searchPath), esc(nodeID), esc(nodeID), esc(searchPath), reqMark, esc(name), typeHTML)
+			fmt.Fprintf(b, `<span class="ks-name-toggle">%s<span class="ks-name">%s</span></span>`,
+				reqMark, esc(name))
 		}
+		b.WriteString(typeControl)
+		b.WriteString(`</div>`)
+		if hasMeta {
+			fmt.Fprintf(b, `<div class="ks-meta" id="%s" data-ks-meta hidden>%s</div>`, esc(metaID), strings.Join(metaParts, ""))
+		}
+		if hasChildren && prop.definition != nil {
+			fmt.Fprintf(b, `<div class="ks-children-container" id="%s" data-ks-children-container hidden>`, esc(childrenID))
+			renderTree(prop.definition, scope, level+1, propPath, widgetID, counter, searchIndex, b)
+			b.WriteString(`</div>`)
+		}
+		b.WriteString("</li>\n")
 	}
 
 	b.WriteString("</ul>")
@@ -704,6 +715,9 @@ const css = `.ks-schema {
 }
 .ks-schema :where(button, input) {
   background: none;
+}
+.ks-schema [hidden] {
+  display: none !important;
 }
 .ks-header { margin-bottom: 1rem; }
 .ks-apiversion {
@@ -815,28 +829,32 @@ const css = `.ks-schema {
 }
 .ks-row { font-weight: 600; }
 .ks-row + .ks-row { margin-top: 0.125rem; }
-.ks-summary {
+.ks-row-line {
   display: inline-flex;
   align-items: baseline;
   gap: 0.25rem;
   padding: 0.125rem 0.375rem;
+}
+.ks-row-line.ks-search-hit { background: #99f6e4; border-radius: 0.25rem; }
+.ks-name-toggle,
+.ks-type-toggle {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.25rem;
+  padding: 0.125rem 0.25rem;
   border-radius: 0.25rem;
-  cursor: pointer;
-  list-style: none;
+  background: transparent;
+  cursor: default;
   user-select: none;
 }
-.ks-summary::-webkit-details-marker { display: none; }
-.ks-summary::marker { display: none; }
-.ks-summary::before { content: none !important; display: none !important; }
-.ks-summary:hover { background: #f0fdfa; }
-.ks-summary.ks-search-hit { background: #99f6e4; }
-.ks-leaf-line {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 0.25rem;
-  padding: 0.125rem 0.375rem;
+.ks-name-toggle.is-clickable,
+.ks-type-toggle.is-clickable {
+  cursor: pointer;
 }
-.ks-leaf-line.ks-search-hit { background: #99f6e4; border-radius: 0.25rem; }
+.ks-name-toggle.is-clickable:hover,
+.ks-type-toggle.is-clickable:hover {
+  background: #f0fdfa;
+}
 .ks-name { color: #0f172a; }
 .ks-required {
   color: #e11d48;
@@ -885,9 +903,6 @@ const css = `.ks-schema {
   color: #64748b;
   user-select: none;
 }
-.ks-validation-summary::-webkit-details-marker { display: none; }
-.ks-validation-summary::marker { display: none; }
-.ks-validation-summary::after { content: none !important; display: none !important; }
 .ks-validation-summary:hover { color: #0f766e; }
 .ks-validation-summary::before {
   content: "▸" !important;
@@ -970,10 +985,20 @@ func renderSearchScript(hostID, templateID string, searchIndex []searchEntry) st
     return;
   }
   const nodeByID = new Map();
+  const metaByID = new Map();
+  const childrenByID = new Map();
   shadow.querySelectorAll("[data-ks-node-id]").forEach((element) => {
     nodeByID.set(element.getAttribute("data-ks-node-id"), element);
   });
+  shadow.querySelectorAll("[data-ks-meta]").forEach((element) => {
+    metaByID.set(element.id, element);
+  });
+  shadow.querySelectorAll("[data-ks-children-container]").forEach((element) => {
+    childrenByID.set(element.id, element);
+  });
   const entryByPath = new Map(entries.map((entry) => [normalize(entry.path), entry]));
+  const metaButtons = shadow.querySelectorAll("[data-ks-meta-target]");
+  const typeButtons = shadow.querySelectorAll("[data-ks-children-target]");
 
   let matches = [];
   let activeIndex = -1;
@@ -1119,8 +1144,8 @@ func renderSearchScript(hostID, templateID string, searchIndex []searchEntry) st
   function revealNode(node) {
     let current = node;
     while (current && current !== root) {
-      if (current.tagName === "DETAILS") {
-        current.open = true;
+      if (current.hasAttribute && current.hasAttribute("data-ks-children-container")) {
+        current.hidden = false;
       }
       current = current.parentElement;
     }
@@ -1170,34 +1195,20 @@ func renderSearchScript(hostID, templateID string, searchIndex []searchEntry) st
     }
   }
 
-  function toggleSubtree(summary, includeDescriptions) {
-    const detail = summary.closest("details");
-    if (!detail) {
+  function toggleSubtree(control, mode) {
+    const row = control.closest(".ks-row");
+    if (!row) {
       return;
     }
-    const subtree = [detail, ...detail.querySelectorAll("details")];
-    const toggled = subtree.filter((candidate) => (
-      includeDescriptions || candidate.dataset.ksHasChildren === "true"
-    ));
+    const childContainers = Array.from(row.querySelectorAll("[data-ks-children-container]"));
+    const metaContainers = Array.from(row.querySelectorAll("[data-ks-meta]"));
+    const toggled = mode === "meta" ? metaContainers : childContainers;
     if (toggled.length === 0) {
       return;
     }
-    const shouldOpen = toggled.some((candidate) => !candidate.open);
-    if (!includeDescriptions) {
-      subtree.forEach((candidate) => {
-        if (candidate.dataset.ksHasChildren !== "true") {
-          candidate.open = false;
-          candidate.classList.remove("ks-hide-desc");
-        }
-      });
-    }
+    const shouldOpen = toggled.some((candidate) => candidate.hasAttribute("hidden"));
     toggled.forEach((candidate) => {
-      candidate.open = shouldOpen;
-      if (includeDescriptions) {
-        candidate.classList.remove("ks-hide-desc");
-        return;
-      }
-      candidate.classList.toggle("ks-hide-desc", shouldOpen);
+      candidate.hidden = !shouldOpen;
     });
   }
 
@@ -1251,9 +1262,40 @@ func renderSearchScript(hostID, templateID string, searchIndex []searchEntry) st
       hideResults();
     }
   });
+  metaButtons.forEach((metaButton) => {
+    metaButton.addEventListener("click", (event) => {
+      event.stopPropagation();
+      if (event.ctrlKey || event.metaKey) {
+        event.preventDefault();
+        toggleSubtree(metaButton, "meta");
+        return;
+      }
+      const meta = metaByID.get(metaButton.getAttribute("data-ks-meta-target"));
+      if (meta) {
+        meta.hidden = !meta.hidden;
+      }
+    });
+  });
+  typeButtons.forEach((typeButton) => {
+    typeButton.addEventListener("click", (event) => {
+      event.stopPropagation();
+      if (event.ctrlKey || event.metaKey) {
+        event.preventDefault();
+        toggleSubtree(typeButton, "children");
+        return;
+      }
+      const children = childrenByID.get(typeButton.getAttribute("data-ks-children-target"));
+      if (children) {
+        children.hidden = !children.hidden;
+      }
+    });
+  });
   root.addEventListener("click", (event) => {
     const target = event.target;
-    const selectable = target instanceof Element ? target.closest(".ks-summary, .ks-leaf-line") : null;
+    if (target instanceof Element && target.closest("button")) {
+      return;
+    }
+    const selectable = target instanceof Element ? target.closest(".ks-row-line") : null;
     if (!selectable || !root.contains(selectable)) {
       return;
     }
@@ -1265,18 +1307,6 @@ func renderSearchScript(hostID, templateID string, searchIndex []searchEntry) st
       return;
     }
     setHash(path);
-  });
-  root.addEventListener("click", (event) => {
-    const target = event.target;
-    const summary = target instanceof Element ? target.closest("summary.ks-summary") : null;
-    if (!summary || !root.contains(summary)) {
-      return;
-    }
-    if (!event.ctrlKey && !event.metaKey) {
-      return;
-    }
-    event.preventDefault();
-    toggleSubtree(summary, event.shiftKey);
   });
   window.addEventListener("hashchange", selectHashTarget);
   selectHashTarget();
