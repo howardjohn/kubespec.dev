@@ -46,7 +46,14 @@ type propertyDef struct {
 	propType    string
 	required    bool
 	isArray     bool
+	validation  []validationItem
 	definition  *propertyMap
+}
+
+type validationItem struct {
+	label   string
+	value   string
+	isBlock bool
 }
 
 type propertyMap struct {
@@ -156,6 +163,7 @@ func toPropertyMapWithResolver(node *yaml.Node, parentRequired []string, resolve
 			propType:    propType,
 			required:    required,
 			isArray:     isArray,
+			validation:  collectValidationItems(propRaw),
 			definition:  def,
 		}
 	}
@@ -417,6 +425,117 @@ func getStringSlice(m nodeMap, key string) []string {
 	return result
 }
 
+func getNodeScalarString(n *yaml.Node) string {
+	n = resolveAlias(n)
+	if n == nil {
+		return ""
+	}
+	if n.Kind == yaml.ScalarNode {
+		return n.Value
+	}
+	out, err := yaml.Marshal(n)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func getSequenceScalarStrings(m nodeMap, key string) []string {
+	n := getNode(m, key)
+	if n == nil || n.Kind != yaml.SequenceNode {
+		return nil
+	}
+	var values []string
+	for _, item := range n.Content {
+		value := getNodeScalarString(item)
+		if value != "" {
+			values = append(values, value)
+		}
+	}
+	return values
+}
+
+func appendValidationItem(items []validationItem, label, value string, isBlock bool) []validationItem {
+	if strings.TrimSpace(value) == "" {
+		return items
+	}
+	return append(items, validationItem{label: label, value: value, isBlock: isBlock})
+}
+
+func appendScalarValidation(items []validationItem, raw nodeMap, key, label string) []validationItem {
+	return appendValidationItem(items, label, getNodeScalarString(getNode(raw, key)), false)
+}
+
+func collectValidationItems(raw nodeMap) []validationItem {
+	var items []validationItem
+
+	if values := getSequenceScalarStrings(raw, "enum"); len(values) > 0 {
+		items = appendValidationItem(items, "Enum", strings.Join(values, ", "), false)
+	}
+	items = appendScalarValidation(items, raw, "const", "Const")
+	items = appendScalarValidation(items, raw, "default", "Default")
+	items = appendScalarValidation(items, raw, "format", "Format")
+	items = appendScalarValidation(items, raw, "pattern", "Pattern")
+	items = appendScalarValidation(items, raw, "multipleOf", "Multiple of")
+	items = appendScalarValidation(items, raw, "minLength", "Min length")
+	items = appendScalarValidation(items, raw, "maxLength", "Max length")
+	items = appendScalarValidation(items, raw, "minItems", "Min items")
+	items = appendScalarValidation(items, raw, "maxItems", "Max items")
+	items = appendScalarValidation(items, raw, "uniqueItems", "Unique items")
+	items = appendScalarValidation(items, raw, "minProperties", "Min properties")
+	items = appendScalarValidation(items, raw, "maxProperties", "Max properties")
+	items = appendScalarValidation(items, raw, "nullable", "Nullable")
+	items = appendScalarValidation(items, raw, "x-kubernetes-int-or-string", "Int or string")
+	items = appendScalarValidation(items, raw, "x-kubernetes-preserve-unknown-fields", "Preserve unknown fields")
+	items = appendScalarValidation(items, raw, "x-kubernetes-list-type", "List type")
+	items = appendScalarValidation(items, raw, "x-kubernetes-map-type", "Map type")
+
+	minimum := getNodeScalarString(getNode(raw, "minimum"))
+	switch getNodeScalarString(getNode(raw, "exclusiveMinimum")) {
+	case "true":
+		if minimum != "" {
+			items = appendValidationItem(items, "Minimum", "> "+minimum, false)
+		}
+	case "":
+		items = appendValidationItem(items, "Minimum", minimum, false)
+	default:
+		items = appendValidationItem(items, "Exclusive minimum", getNodeScalarString(getNode(raw, "exclusiveMinimum")), false)
+		if minimum != "" {
+			items = appendValidationItem(items, "Minimum", minimum, false)
+		}
+	}
+
+	maximum := getNodeScalarString(getNode(raw, "maximum"))
+	switch getNodeScalarString(getNode(raw, "exclusiveMaximum")) {
+	case "true":
+		if maximum != "" {
+			items = appendValidationItem(items, "Maximum", "< "+maximum, false)
+		}
+	case "":
+		items = appendValidationItem(items, "Maximum", maximum, false)
+	default:
+		items = appendValidationItem(items, "Exclusive maximum", getNodeScalarString(getNode(raw, "exclusiveMaximum")), false)
+		if maximum != "" {
+			items = appendValidationItem(items, "Maximum", maximum, false)
+		}
+	}
+
+	if values := getSequenceScalarStrings(raw, "x-kubernetes-list-map-keys"); len(values) > 0 {
+		items = appendValidationItem(items, "List map keys", strings.Join(values, ", "), false)
+	}
+
+	validations := getNode(raw, "x-kubernetes-validations")
+	if validations != nil && validations.Kind == yaml.SequenceNode {
+		for _, item := range validations.Content {
+			m := decodeMapping(resolveAlias(item))
+			message := getString(m, "message")
+			items = appendValidationItem(items, "Rule", message, true)
+		}
+	}
+
+	return items
+}
+
 func contains(slice []string, s string) bool {
 	for _, v := range slice {
 		if v == s {
@@ -424,6 +543,26 @@ func contains(slice []string, s string) bool {
 		}
 	}
 	return false
+}
+
+func renderValidationDetails(items []validationItem) string {
+	if len(items) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString(`<details class="ks-validation"><summary class="ks-validation-summary">Validation</summary><div class="ks-validation-body">`)
+	for _, item := range items {
+		b.WriteString(`<div class="ks-validation-item">`)
+		fmt.Fprintf(&b, `<span class="ks-validation-label">%s</span>`, esc(item.label))
+		if item.isBlock || strings.Contains(item.value, "\n") {
+			fmt.Fprintf(&b, `<pre class="ks-validation-value ks-validation-value-block">%s</pre>`, esc(item.value))
+		} else {
+			fmt.Fprintf(&b, `<span class="ks-validation-value">%s</span>`, esc(item.value))
+		}
+		b.WriteString(`</div>`)
+	}
+	b.WriteString(`</div></details>`)
+	return b.String()
 }
 
 // ---------------------------------------------------------------------------
@@ -494,20 +633,27 @@ func renderTree(pm *propertyMap, scope string, level int, path, widgetID string,
 		}
 		typeCls := typeClass(prop.propType, hasChildren)
 		typeHTML := fmt.Sprintf(`<span class="ks-type %s">%s</span>`, typeCls, esc(prop.propType))
-		descHTML := ""
+		metaHTML := ""
+		var metaParts []string
 		if prop.description != "" {
-			descHTML = fmt.Sprintf(`<pre class="ks-desc">%s</pre>`, esc(prop.description))
+			metaParts = append(metaParts, fmt.Sprintf(`<pre class="ks-desc">%s</pre>`, esc(prop.description)))
+		}
+		if validationHTML := renderValidationDetails(prop.validation); validationHTML != "" {
+			metaParts = append(metaParts, validationHTML)
+		}
+		if len(metaParts) > 0 {
+			metaHTML = `<div class="ks-meta">` + strings.Join(metaParts, "") + `</div>`
 		}
 
-		if hasChildren || prop.description != "" {
+		if hasChildren || metaHTML != "" {
 			openAttr := ""
 			if level == 0 && hasChildren {
 				openAttr = " open"
 			}
-			fmt.Fprintf(b, `<li class="ks-row" data-ks-path="%s"><details%s data-ks-has-children="%t" data-ks-has-description="%t">`, esc(searchPath), openAttr, hasChildren, prop.description != "")
+			fmt.Fprintf(b, `<li class="ks-row" data-ks-path="%s"><details%s data-ks-has-children="%t" data-ks-has-description="%t">`, esc(searchPath), openAttr, hasChildren, metaHTML != "")
 			fmt.Fprintf(b, `<summary class="ks-summary" id="%s" data-ks-node-id="%s" data-ks-path="%s">%s<span class="ks-name">%s</span>%s</summary>`,
 				esc(nodeID), esc(nodeID), esc(searchPath), reqMark, esc(name), typeHTML)
-			b.WriteString(descHTML)
+			b.WriteString(metaHTML)
 			if hasChildren && prop.definition != nil {
 				renderTree(prop.definition, scope, level+1, propPath, widgetID, counter, searchIndex, b)
 			}
@@ -673,19 +819,81 @@ const css = `.ks-schema {
 .ks-type-object  { color: #7c3aed; }
 .ks-type-complex { color: #db2777; }
 .ks-type-other   { color: #0f766e; }
-.ks-desc {
+.ks-meta {
   margin: 0.35rem 0 0.65rem 0.375rem;
   padding: 0.6rem 0.75rem;
   border-radius: 0.65rem;
   background: #f8fafc;
+  max-width: 48rem;
+  box-shadow: inset 0 0 0 1px rgba(203, 213, 225, 0.55);
+}
+.ks-desc {
+  margin: 0;
   font-size: 0.75rem;
   font-weight: 400;
   font-family: system-ui, sans-serif;
   white-space: pre-wrap;
-  max-width: 48rem;
   color: #334155;
 }
-.ks-hide-desc > .ks-desc { display: none; }
+.ks-hide-desc > .ks-meta { display: none; }
+.ks-validation {
+  margin-top: 0.55rem;
+  border-top: 1px solid #dbe2ea;
+  padding-top: 0.45rem;
+}
+.ks-validation-summary {
+  display: flex;
+  align-items: center;
+  padding: 0;
+  cursor: pointer;
+  list-style: none;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: #64748b;
+  user-select: none;
+}
+.ks-validation-summary::-webkit-details-marker { display: none; }
+.ks-validation-summary::marker { display: none; }
+.ks-validation-summary:hover { color: #0f766e; }
+.ks-validation-summary::before {
+  content: "▸";
+  margin-right: 0.4rem;
+  color: #94a3b8;
+  transition: transform 120ms ease;
+}
+.ks-validation[open] > .ks-validation-summary::before {
+  transform: rotate(90deg);
+}
+.ks-validation-body {
+  padding-top: 0.45rem;
+}
+.ks-validation-item {
+  display: grid;
+  grid-template-columns: minmax(0, 7rem) minmax(0, 1fr);
+  gap: 0.25rem 0.6rem;
+  padding-top: 0.35rem;
+}
+.ks-validation-label {
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: #64748b;
+}
+.ks-validation-value {
+  min-width: 0;
+  font-size: 0.68rem;
+  font-weight: 400;
+  color: #334155;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.ks-validation-value-block {
+  margin: 0;
+  font-family: inherit;
+  background: transparent;
+  border-radius: 0;
+  padding: 0;
+}
 `
 
 func renderSearchScript(widgetID string, searchIndex []searchEntry) string {
