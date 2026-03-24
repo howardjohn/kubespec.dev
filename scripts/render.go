@@ -504,7 +504,7 @@ func renderTree(pm *propertyMap, scope string, level int, path, widgetID string,
 			if level == 0 && hasChildren {
 				openAttr = " open"
 			}
-			fmt.Fprintf(b, `<li class="ks-row" data-ks-path="%s"><details%s>`, esc(searchPath), openAttr)
+			fmt.Fprintf(b, `<li class="ks-row" data-ks-path="%s"><details%s data-ks-has-children="%t" data-ks-has-description="%t">`, esc(searchPath), openAttr, hasChildren, prop.description != "")
 			fmt.Fprintf(b, `<summary class="ks-summary" id="%s" data-ks-node-id="%s" data-ks-path="%s">%s<span class="ks-name">%s</span>%s</summary>`,
 				esc(nodeID), esc(nodeID), esc(searchPath), reqMark, esc(name), typeHTML)
 			b.WriteString(descHTML)
@@ -525,38 +525,37 @@ const css = `.ks-schema {
   font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   font-size: 14px;
   line-height: 1.5;
-  color: #111827;
+  color: #0f172a;
   max-width: 56rem;
 }
 .ks-header { margin-bottom: 1rem; }
 .ks-apiversion {
   font-size: 0.875rem;
-  font-weight: 600;
-  color: #6b7280;
-  margin-bottom: 0.25rem;
-}
-.ks-scope {
-  display: inline-flex;
-  align-items: center;
-  font-size: 0.75rem;
-  color: #6b7280;
-  border: 1px solid #d1d5db;
-  border-radius: 0.375rem;
-  padding: 0.125rem 0.5rem;
-  margin-bottom: 0.375rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  color: #0f766e;
+  margin-bottom: 0.4rem;
 }
 .ks-kind {
   font-size: 1.875rem;
   font-weight: 700;
-  margin: 0.25rem 0 0;
+  margin: 0;
   line-height: 1.2;
+  letter-spacing: -0.02em;
+  color: #020617;
 }
 .ks-resource-desc {
+  margin: 0.75rem 0 1rem;
+  padding: 0.8rem 0.95rem;
+  border-left: 4px solid #14b8a6;
+  border-radius: 0.75rem;
+  background: linear-gradient(135deg, #ecfeff 0%, #f8fafc 100%);
   font-size: 0.875rem;
-  color: #6b7280;
-  margin: 0.5rem 0 1rem;
+  color: #164e63;
+  line-height: 1.65;
   white-space: pre-wrap;
   max-width: 48rem;
+  box-shadow: inset 0 0 0 1px rgba(20, 184, 166, 0.08);
 }
 .ks-search {
   position: relative;
@@ -567,18 +566,18 @@ const css = `.ks-schema {
   width: 100%;
   box-sizing: border-box;
   padding: 0.625rem 0.75rem;
-  border: 1px solid #d1d5db;
-  border-radius: 0.5rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 0.65rem;
   background: #ffffff;
-  color: #111827;
+  color: #0f172a;
   font: inherit;
-  box-shadow: 0 1px 2px rgba(17, 24, 39, 0.04);
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06);
 }
 .ks-search-input::placeholder { color: #9ca3af; }
 .ks-search-input:focus {
   outline: none;
-  border-color: #2563eb;
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+  border-color: #0f766e;
+  box-shadow: 0 0 0 3px rgba(20, 184, 166, 0.14);
 }
 .ks-search-results {
   position: absolute;
@@ -587,10 +586,10 @@ const css = `.ks-schema {
   right: 0;
   z-index: 20;
   padding: 0.375rem;
-  border: 1px solid #d1d5db;
+  border: 1px solid #cbd5e1;
   border-radius: 0.75rem;
   background: rgba(255, 255, 255, 0.98);
-  box-shadow: 0 12px 32px rgba(17, 24, 39, 0.12);
+  box-shadow: 0 18px 40px rgba(15, 23, 42, 0.14);
   backdrop-filter: blur(8px);
 }
 .ks-search-results[hidden] { display: none; }
@@ -606,24 +605,24 @@ const css = `.ks-schema {
   cursor: pointer;
 }
 .ks-search-result:hover,
-.ks-search-result.is-active { background: #eff6ff; }
+.ks-search-result.is-active { background: #ccfbf1; }
 .ks-search-result-path {
   display: block;
   font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
   font-size: 0.8125rem;
   font-weight: 600;
-  color: #111827;
+  color: #0f172a;
 }
 .ks-search-result-type {
   display: block;
   margin-top: 0.125rem;
   font-size: 0.75rem;
-  color: #6b7280;
+  color: #475569;
 }
 .ks-search-empty {
   padding: 0.5rem 0.625rem;
   font-size: 0.8125rem;
-  color: #6b7280;
+  color: #475569;
 }
 .ks-tree {
   list-style: none;
@@ -635,7 +634,7 @@ const css = `.ks-schema {
 .ks-tree.ks-nested {
   margin-left: 1rem;
   padding-left: 0.625rem;
-  border-left: 2px solid #e5e7eb;
+  border-left: 2px solid #cbd5e1;
 }
 .ks-row { font-weight: 600; }
 .ks-row + .ks-row { margin-top: 0.125rem; }
@@ -651,47 +650,43 @@ const css = `.ks-schema {
 }
 .ks-summary::-webkit-details-marker { display: none; }
 .ks-summary::marker { display: none; }
-.ks-summary:hover { background: #f3f4f6; }
-.ks-summary.ks-search-hit { background: #dbeafe; }
+.ks-summary:hover { background: #f0fdfa; }
+.ks-summary.ks-search-hit { background: #99f6e4; }
 .ks-leaf-line {
   display: inline-flex;
   align-items: baseline;
   gap: 0.25rem;
   padding: 0.125rem 0.375rem;
 }
-.ks-leaf-line.ks-search-hit { background: #dbeafe; border-radius: 0.25rem; }
-.ks-name { color: #111827; }
+.ks-leaf-line.ks-search-hit { background: #99f6e4; border-radius: 0.25rem; }
+.ks-name { color: #0f172a; }
 .ks-required {
-  color: #dc2626;
+  color: #e11d48;
   font-size: 0.6875rem;
   margin-right: 0.125rem;
   font-family: system-ui, sans-serif;
 }
 .ks-type { font-weight: 400; }
-.ks-type-string  { color: #c2410c; }
-.ks-type-boolean { color: #1d4ed8; }
-.ks-type-integer { color: #0369a1; }
+.ks-type-string  { color: #ea580c; }
+.ks-type-boolean { color: #2563eb; }
+.ks-type-integer { color: #0284c7; }
 .ks-type-object  { color: #7c3aed; }
-.ks-type-complex { color: #9d174d; }
-.ks-type-other   { color: #065f46; }
+.ks-type-complex { color: #db2777; }
+.ks-type-other   { color: #0f766e; }
 .ks-desc {
-  margin: 0.25rem 0 0.5rem 0.375rem;
+  margin: 0.35rem 0 0.65rem 0.375rem;
+  padding: 0.6rem 0.75rem;
+  border-radius: 0.65rem;
+  background: #f8fafc;
   font-size: 0.75rem;
   font-weight: 400;
   font-family: system-ui, sans-serif;
   white-space: pre-wrap;
   max-width: 48rem;
-  color: #374151;
+  color: #334155;
 }
-.ks-footer {
-  margin-top: 1rem;
-  padding-top: 0.625rem;
-  border-top: 1px solid #e5e7eb;
-  font-size: 0.75rem;
-  color: #6b7280;
-}
-.ks-footer a { color: #2563eb; text-decoration: none; }
-.ks-footer a:hover { text-decoration: underline; }`
+.ks-hide-desc > .ks-desc { display: none; }
+`
 
 func renderSearchScript(widgetID string, searchIndex []searchEntry) string {
 	var entries strings.Builder
@@ -890,6 +885,37 @@ func renderSearchScript(widgetID string, searchIndex []searchEntry) string {
     hideResults();
   }
 
+  function toggleSubtree(summary, includeDescriptions) {
+    const detail = summary.closest("details");
+    if (!detail) {
+      return;
+    }
+    const subtree = [detail, ...detail.querySelectorAll("details")];
+    const toggled = subtree.filter((candidate) => (
+      includeDescriptions || candidate.dataset.ksHasChildren === "true"
+    ));
+    if (toggled.length === 0) {
+      return;
+    }
+    const shouldOpen = toggled.some((candidate) => !candidate.open);
+    if (!includeDescriptions) {
+      subtree.forEach((candidate) => {
+        if (candidate.dataset.ksHasChildren !== "true") {
+          candidate.open = false;
+          candidate.classList.remove("ks-hide-desc");
+        }
+      });
+    }
+    toggled.forEach((candidate) => {
+      candidate.open = shouldOpen;
+      if (includeDescriptions) {
+        candidate.classList.remove("ks-hide-desc");
+        return;
+      }
+      candidate.classList.toggle("ks-hide-desc", shouldOpen);
+    });
+  }
+
   input.addEventListener("input", renderMatches);
   input.addEventListener("focus", () => {
     if (input.value.trim()) {
@@ -940,6 +966,18 @@ func renderSearchScript(widgetID string, searchIndex []searchEntry) string {
       hideResults();
     }
   });
+  root.addEventListener("click", (event) => {
+    const target = event.target;
+    const summary = target instanceof Element ? target.closest("summary.ks-summary") : null;
+    if (!summary || !root.contains(summary)) {
+      return;
+    }
+    if (!event.ctrlKey && !event.metaKey) {
+      return;
+    }
+    event.preventDefault();
+    toggleSubtree(summary, event.shiftKey);
+  });
 })();
 </script>`,
 		strconv.Quote(widgetID),
@@ -953,22 +991,6 @@ func renderWidget(kind, group, version, scope string, pm *propertyMap, widgetID 
 	if group != "" {
 		apiVersion = group + "/" + version
 	}
-	scopeLabel := "Cluster-scoped Resource"
-	if scope == "Namespaced" {
-		scopeLabel = "Namespaced Resource"
-	} else if scope == "Schema" {
-		scopeLabel = "JSON Schema"
-	}
-	canonicalURL := ""
-	if scope != "Schema" {
-		parts := []string{}
-		for _, p := range []string{group, version, kind} {
-			if p != "" {
-				parts = append(parts, p)
-			}
-		}
-		canonicalURL = "https://kubespec.dev/" + strings.Join(parts, "/")
-	}
 
 	var b strings.Builder
 	searchIndex := make([]searchEntry, 0, 64)
@@ -978,7 +1000,6 @@ func renderWidget(kind, group, version, scope string, pm *propertyMap, widgetID 
 	b.WriteString("<style>\n" + css + "\n</style>\n")
 	b.WriteString(`<div class="ks-header">` + "\n")
 	fmt.Fprintf(&b, `  <div class="ks-apiversion">%s</div>`+"\n", esc(apiVersion))
-	fmt.Fprintf(&b, `  <div class="ks-scope">%s</div>`+"\n", esc(scopeLabel))
 	fmt.Fprintf(&b, `  <h2 class="ks-kind">%s</h2>`+"\n", esc(kind))
 	if pm.description != "" {
 		fmt.Fprintf(&b, `  <pre class="ks-resource-desc">%s</pre>`+"\n", esc(pm.description))
@@ -987,11 +1008,6 @@ func renderWidget(kind, group, version, scope string, pm *propertyMap, widgetID 
 	b.WriteString("</div>\n")
 	renderTree(pm, scope, 0, "", widgetID, &nodeCounter, &searchIndex, &b)
 	b.WriteString("\n")
-	if canonicalURL != "" {
-		b.WriteString(`<div class="ks-footer">` + "\n")
-		fmt.Fprintf(&b, `  View full docs on <a href="%s" target="_blank" rel="noopener">kubespec.dev ↗</a>`+"\n", esc(canonicalURL))
-		b.WriteString("</div>\n")
-	}
 	b.WriteString(renderSearchScript(widgetID, searchIndex) + "\n")
 	b.WriteString("</div>")
 	return b.String()
